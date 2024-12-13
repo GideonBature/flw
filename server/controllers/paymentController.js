@@ -2,18 +2,28 @@ const axios = require('axios');
 const Transaction = require('../models/Transaction');
 const Lawyer = require('../models/Lawyer');
 const dotenv = require('dotenv');
+const { mongoose } = require('mongoose');
 
 // Load environment variables
 dotenv.config({ path: './.env' });
+
+// const Flutterwave = require('flutterwave-node-v3');
+// const flw = new Flutterwave(process.env.FLW_PUBLIC_KEY, process.env.FLW_SECRET_KEY);
 
 exports.initiatePayment = async (req, res) => {
     try {
         const { amount, userId, lawyerId, email } = req.body;
 
+        const userObjectId = new mongoose.Types.ObjectId(userId);
+        const lawyerObjectId = new mongoose.Types.ObjectId(lawyerId);
+
+        console.log(userObjectId);
+        console.log(lawyerObjectId);
+
         // Create transaction record
         const transaction = await Transaction.create({
-            userId,
-            lawyerId,
+            userId: userObjectId,
+            lawyerId: lawyerObjectId,
             amount,
             status: 'pending',
             flutterwaveRef: `FLW-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
@@ -41,7 +51,6 @@ exports.initiatePayment = async (req, res) => {
         };
 
         console.log(payload);
-        console.log(process.env.FLW_SECRET_KEY);
 
         const response = await axios.post('https://api.flutterwave.com/v3/payments', payload, {
             headers: {
@@ -66,61 +75,138 @@ exports.initiatePayment = async (req, res) => {
     }
 };
 
+// exports.verifyPayment = async (req, res) => {
+//     try {
+//         const { transaction_id, status, tx_ref } = req.query;
+        
+//         if (status === 'successful') {
+//             // Verify the transaction
+//             const verifyResponse = await axios.get(
+//                 `https://api.flutterwave.com/v3/transactions/${transaction_id}/verify`,
+//                 {
+//                     headers: {
+//                         'Authorization': `Bearer ${process.env.FLW_SECRET_KEY}`,
+//                         'Content-Type': 'application/json',
+//                     }
+//                 }
+//             );
+
+//             if (verifyResponse.data.status === "success") {
+//                 const transaction = await Transaction.findOne({ 
+//                     flutterwaveRef: tx_ref 
+//                 });
+
+//                 if (!transaction) {
+//                     return res.status(404).json({
+//                         success: false,
+//                         message: 'Transaction not found'
+//                     });
+//                 }
+
+//                 transaction.status = 'in_escrow';
+//                 await transaction.save();
+
+//                 // Update lawyer's escrow balance
+//                 const lawyer = await Lawyer.findById(transaction.lawyerId);
+//                 if (lawyer) {
+//                     lawyer.escrowBalance += transaction.amount;
+//                     lawyer.activeTransactions.push(transaction._id);
+//                     await lawyer.save();
+//                 }
+
+//                 res.status(200).json({
+//                     success: true,
+//                     message: 'Payment verified and in escrow'
+//                 });
+//             } else {
+//                 res.status(400).json({
+//                     success: false,
+//                     message: 'Payment verification failed'
+//                 });
+//             }
+//         } else {
+//             res.status(400).json({
+//                 success: false,
+//                 message: 'Payment was not successful'
+//             });
+//         }
+//     } catch (error) {
+//         console.error('Payment verification error:', error.response?.data || error.message);
+//         res.status(500).json({
+//             success: false,
+//             message: 'Error verifying payment'
+//         });
+//     }
+// };
+
 exports.verifyPayment = async (req, res) => {
     try {
         const { transaction_id, status, tx_ref } = req.query;
-        
-        if (status === 'successful') {
-            // Verify the transaction
-            const verifyResponse = await axios.get(
-                `https://api.flutterwave.com/v3/transactions/${transaction_id}/verify`,
-                {
-                    headers: {
-                        'Authorization': `Bearer ${process.env.FLW_SECRET_KEY}`,
-                        'Content-Type': 'application/json',
-                    }
-                }
-            );
 
-            if (verifyResponse.data.status === "success") {
-                const transaction = await Transaction.findOne({ 
-                    flutterwaveRef: tx_ref 
-                });
+        console.log('Received query:', { transaction_id, status, tx_ref });
 
-                if (!transaction) {
-                    return res.status(404).json({
-                        success: false,
-                        message: 'Transaction not found'
-                    });
-                }
-
-                transaction.status = 'in_escrow';
-                await transaction.save();
-
-                // Update lawyer's escrow balance
-                const lawyer = await Lawyer.findById(transaction.lawyerId);
-                if (lawyer) {
-                    lawyer.escrowBalance += transaction.amount;
-                    lawyer.activeTransactions.push(transaction._id);
-                    await lawyer.save();
-                }
-
-                res.status(200).json({
-                    success: true,
-                    message: 'Payment verified and in escrow'
-                });
-            } else {
-                res.status(400).json({
-                    success: false,
-                    message: 'Payment verification failed'
-                });
-            }
-        } else {
-            res.status(400).json({
+        if (status !== 'successful') {
+            return res.status(400).json({
                 success: false,
                 message: 'Payment was not successful'
             });
         }
+
+        // Verify the transaction with Flutterwave
+        const verifyResponse = await axios.get(
+            `https://api.flutterwave.com/v3/transactions/${transaction_id}/verify`,
+            {
+                headers: {
+                    'Authorization': `Bearer ${process.env.FLW_SECRET_KEY}`,
+                    'Content-Type': 'application/json',
+                }
+            }
+        );
+
+        console.log('Flutterwave Verification Response:', verifyResponse.data);
+
+        if (verifyResponse.data.status !== "success") {
+            return res.status(400).json({
+                success: false,
+                message: 'Payment verification failed'
+            });
+        }
+
+        const transaction = await Transaction.findOne({
+            flutterwaveRef: tx_ref
+        });
+
+        console.log('Transaction:', transaction);
+
+        if (!transaction) {
+            return res.status(404).json({
+                success: false,
+                message: 'Transaction not found'
+            });
+        }
+
+        transaction.status = 'in_escrow';
+        await transaction.save();
+
+        console.log('Transaction updated:', transaction);
+
+        // Update lawyer's escrow balance
+        const lawyer = await Lawyer.findById(transaction.lawyerId);
+        console.log('Lawyer:', lawyer);
+
+        if (lawyer) {
+            lawyer.escrowBalance += transaction.amount;
+            lawyer.activeTransactions.push(transaction._id);
+            await lawyer.save();
+        }
+
+        console.log('lawyer:', lawyer);
+
+        res.status(200).json({
+            success: true,
+            message: 'Payment verified and in escrow'
+        });
+
     } catch (error) {
         console.error('Payment verification error:', error.response?.data || error.message);
         res.status(500).json({
@@ -129,6 +215,7 @@ exports.verifyPayment = async (req, res) => {
         });
     }
 };
+
 
 exports.processEscrowPayments = async () => {
     try {

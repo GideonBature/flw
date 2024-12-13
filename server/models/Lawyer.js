@@ -29,7 +29,7 @@ const lawyerSchema = new mongoose.Schema({
         default: 0
     },
     activeTransactions: [{
-        type: String,// mongoose.Schema.Types.ObjectId,
+        type: mongoose.Schema.Types.ObjectId,
         ref: 'Transaction'
     }]
 }, {
