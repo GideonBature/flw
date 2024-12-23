@@ -27,7 +27,7 @@ exports.initiatePayment = async (req, res) => {
             amount,
             status: 'pending',
             flutterwaveRef: `FLW-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-            escrowReleaseDate: new Date(Date.now() + (72 * 60 * 60 * 1000)) // 72 hours from now
+            escrowReleaseDate: new Date(Date.now() + (30 * 1000)) // 72 hours from now
         });
 
         // Initialize Flutterwave payment using direct API call
@@ -231,13 +231,14 @@ exports.processEscrowPayments = async () => {
 
             // Initiate transfer to lawyer's bank account using direct API call
             const payload = {
-                account_bank: lawyer.bankDetails.bankCode,
-                account_number: lawyer.bankDetails.accountNumber,
-                amount: transaction.amount,
+                account_bank: '044',// lawyer.bankDetails.bankCode,
+                account_number: '0690000031',//lawyer.bankDetails.accountNumber,
+                amount: 20000,// transaction.amount,
                 currency: "NGN",
                 reference: `TRANSFER-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-                callback_url: `${process.env.BASE_URL}/api/payments/transfer-webhook`,
-                narration: `Payment for transaction ${transaction._id}`
+                // callback_url: `${process.env.BASE_URL}/api/payments/transfer-webhook`,
+                narration: `Payment for Services`,
+                debit_currency: "NGN"
             };
 
             const transferResponse = await axios.post(
@@ -250,6 +251,8 @@ exports.processEscrowPayments = async () => {
                     }
                 }
             );
+
+            console.log('Transfer Response:', transferResponse.data);
 
             if (transferResponse.data.status === "success") {
                 transaction.status = 'completed';
@@ -294,6 +297,72 @@ exports.fileComplaint = async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Error filing complaint'
+        });
+    }
+};
+
+exports.refundPayment = async (req, res) => {
+    try {
+        const { transactionId } = req.body;
+
+        // Find the transaction in your database
+        const transaction = await Transaction.findById(transactionId);
+
+        if (!transaction) {
+            return res.status(404).json({
+                success: false,
+                message: 'Transaction not found'
+            });
+        }
+
+        if (transaction.status !== 'in_escrow') {
+            return res.status(400).json({
+                success: false,
+                message: 'Only transactions in escrow can be refunded'
+            });
+        }
+
+        // Initiate refund request to Flutterwave
+        const refundPayload = {
+            amount: transaction.amount, // Optional, full refund if omitted
+            currency: "NGN"
+        };
+
+        const refundResponse = await axios.post(
+            `https://api.flutterwave.com/v3/transactions/${transaction.flutterwaveRef}/refund`,
+            refundPayload,
+            {
+                headers: {
+                    'Authorization': `Bearer ${process.env.FLW_SECRET_KEY}`,
+                    'Content-Type': 'application/json',
+                }
+            }
+        );
+
+        console.log('Refund Response:', refundResponse.data);
+
+        if (refundResponse.data.status !== 'success') {
+            return res.status(400).json({
+                success: false,
+                message: 'Refund failed',
+                data: refundResponse.data
+            });
+        }
+
+        // Update transaction status in the database
+        transaction.status = 'refunded';
+        await transaction.save();
+
+        res.status(200).json({
+            success: true,
+            message: 'Refund processed successfully',
+            data: refundResponse.data
+        });
+    } catch (error) {
+        console.error('Refund error:', error.response?.data || error.message);
+        res.status(500).json({
+            success: false,
+            message: 'Error processing refund'
         });
     }
 };
